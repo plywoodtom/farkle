@@ -193,7 +193,7 @@
     <div class="tag" id="ctag">Somebody call the po-po!</div>
     <div class="yt" id="ytHolder"></div>
     <button class="close" onclick="closeCelebrate()">Turn it off &amp; keep playing</button>
-    <div class="foot">Inspired by Dierks Bentley &ndash; "5-1-5-0". Sound is generated on your device (no ads, works offline).</div>
+    <div class="foot">Dierks Bentley &ndash; "5-1-5-0" (Apple's official 30-sec preview, no ads).</div>
   </div>
 </div>
 
@@ -201,6 +201,9 @@
 "use strict";
 const LS_RULES = "farkle_rules_v1";
 const LS_GAME  = "farkle_game_v1";
+// Apple's official 30-second preview of Dierks Bentley "5-1-5-0" (album: Home).
+// Audio-only, no ads, CORS-open. Streams from Apple, so it needs internet.
+const SONG_PREVIEW = "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview211/v4/b2/2a/26/b22a2626-55bd-e064-9c59-fcd7960c6d0f/mzaf_8830689377643567910.plus.aac.p.m4a";
 
 // Two ready-made scoring sets. "House" = how Tom grew up playing.
 // "Store" = the boxed commercial game rules.
@@ -226,7 +229,7 @@ const PRESETS = {house:HOUSE_RULES, store:STORE_RULES};
 // Sound settings are kept separate so switching a scoring preset never disturbs them.
 const SONG_DEFAULTS = {
   songOn:true, songNumber:5150,
-  songDuration:7, autoReturn:true, useLocalClip:false,
+  songDuration:22, autoReturn:true, useLocalClip:false,
   wompOn:true
 };
 const DEFAULT_RULES = {...HOUSE_RULES, ...SONG_DEFAULTS, preset:'house'};
@@ -444,28 +447,15 @@ function sirenNotes(start,reps,out){
     out.push({freq:880,glideTo:660,start:t+0.25,dur:0.25,type:"sawtooth",vol:0.28});
   }
 }
-function buildJingle(dur){
-  const riff=[[784,.5],[784,.25],[880,.25],[988,.5],[784,.5],[659,.5],[784,.75],[988,.5],[880,.75]];
-  const beat=0.16, notes=[]; let t=0;
-  while(t < dur-1.2){
-    for(const [f,b] of riff){
-      const d=b*beat;
-      notes.push({freq:f,start:t,dur:d*0.95,type:"square",vol:0.30});
-      notes.push({freq:f/2,start:t,dur:d*0.95,type:"triangle",vol:0.16});
-      t+=d;
-      if(t>=dur-1.2) break;
-    }
-  }
-  sirenNotes(t,2,notes); // "somebody call the po-po"
-  return notes;
-}
+// Offline fallback for the 5150 win: just the police siren ("call the po-po").
+function buildSiren(){ const n=[]; sirenNotes(0,4,n); return n; }
 function buildWomp(){
   const seq=[[233.08,0,0.30],[220.00,0.28,0.30],[207.65,0.56,0.30],[196.00,0.84,0.75]];
   return seq.map(([f,s,d])=>({freq:f,glideTo:f*0.93,start:s,dur:d,type:"sawtooth",vol:0.32}));
 }
-let _jingle={}, _womp=null;
+let _siren=null, _womp=null, currentAudio=null;
 function playUri(uri){ try{ const a=new Audio(uri); a.volume=1; a.play().catch(()=>{}); return a; }catch(e){ return null; } }
-function play5150Tune(dur){ dur=Math.max(4,dur||5); if(!_jingle[dur]) _jingle[dur]=makeWav(buildJingle(dur)); return playUri(_jingle[dur]); }
+function playFallbackSiren(){ if(!_siren) _siren=makeWav(buildSiren()); currentAudio=playUri(_siren); }
 function playWompWomp(){ if(!_womp) _womp=makeWav(buildWomp()); playUri(_womp); }
 
 /* ---------------- 5150 CELEBRATION ---------------- */
@@ -477,20 +467,21 @@ function songVisual(){
 function triggerSong(name){
   document.getElementById("cbig").innerHTML="5&#8209;1&#8209;5&#8209;0";
   document.getElementById("ctag").textContent = (name?name+" hit ":"")+"5-1-5-0 — somebody call the po-po!";
-  const holder=document.getElementById("ytHolder");
-  const dur=Math.max(4, rules.songDuration|0);
+  document.getElementById("ytHolder").innerHTML=songVisual();
+  const dur=Math.max(5, rules.songDuration|0);
 
-  if(rules.useLocalClip){
-    holder.innerHTML='<audio id="clipEl" autoplay src="farkle-clip.mp3"></audio>'+songVisual();
-    const a=document.getElementById("clipEl");
+  // Play the real song: your own file if set, otherwise Apple's official preview.
+  // If that can't load (offline / missing file), fall back to the synth siren.
+  const src = rules.useLocalClip ? "farkle-clip.mp3" : SONG_PREVIEW;
+  try{
+    const a=new Audio(src); a.volume=1;
     a.addEventListener("ended",()=>{ if(rules.autoReturn) closeCelebrate(); });
-    a.addEventListener("error",()=>{ play5150Tune(dur); }); // no file? fall back to the synth jingle
-    armAutoReturn(dur+40);
-  } else {
-    holder.innerHTML=songVisual();
-    play5150Tune(dur);
-    armAutoReturn(dur);
-  }
+    a.addEventListener("error",()=>{ playFallbackSiren(); });
+    a.play().catch(()=>{ playFallbackSiren(); });
+    currentAudio=a;
+  }catch(e){ playFallbackSiren(); }
+
+  armAutoReturn(dur);
   document.getElementById("celebrate").classList.add("show");
 }
 function armAutoReturn(dur){
@@ -500,8 +491,9 @@ function armAutoReturn(dur){
 function testSong(){ triggerSong(""); }
 function closeCelebrate(){
   clearTimeout(songTimer);
+  if(currentAudio){ try{ currentAudio.pause(); currentAudio.currentTime=0; }catch(e){} currentAudio=null; }
   document.getElementById("celebrate").classList.remove("show");
-  document.getElementById("ytHolder").innerHTML=""; // stop any clip
+  document.getElementById("ytHolder").innerHTML="";
 }
 
 /* ---------------- RENDER ---------------- */
@@ -654,10 +646,11 @@ const RULE_FIELDS=[
   ["grp","🔊 Sounds"],
   ["songOn","Play 5150 jackpot sound","bool"],
   ["songNumber","...when a total hits exactly","num"],
-  ["songDuration","Celebration length (seconds)","num"],
+  ["songDuration","Song length before auto-return (sec)","num"],
   ["autoReturn","Auto return to game after","bool"],
   ["wompOn","Womp-womp sound on Farkle","bool"],
-  ["note","Optional: drop a farkle-clip.mp3 in the app folder and turn this on to play your own audio instead of the built-in jingle."],
+  ["note","The 5150 song streams Apple's official 30-sec preview of Dierks Bentley's track (needs internet). No internet? It plays a police siren instead."],
+  ["note","Optional: drop your own farkle-clip.mp3 in the app folder and turn this on to use that instead."],
   ["useLocalClip","Use my own file (farkle-clip.mp3)","bool"]
 ];
 function presetDescText(){
