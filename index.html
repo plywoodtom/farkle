@@ -206,7 +206,17 @@ const LS_GAME  = "farkle_game_v1";
 // Audio-only, no ads, CORS-open. Streams from Apple, so it needs internet.
 const SONG_PREVIEW = "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview211/v4/b2/2a/26/b22a2626-55bd-e064-9c59-fcd7960c6d0f/mzaf_8830689377643567910.plus.aac.p.m4a";
 // Real sound effects (CORS-open Apple previews).
-const WOMP_SOUND = "https://audio-ssl.itunes.apple.com/itunes-assets/Music3/v4/14/5d/60/145d6075-fbd5-e88b-030f-95fea248a4ee/mzaf_7558783773857321600.plus.aac.p.m4a"; // sad trombone ~4s
+// A pool of sad/fail sounds — a random one plays on each Farkle so it never gets stale.
+const FAIL_SOUNDS = [
+  "https://audio-ssl.itunes.apple.com/itunes-assets/Music3/v4/14/5d/60/145d6075-fbd5-e88b-030f-95fea248a4ee/mzaf_7558783773857321600.plus.aac.p.m4a", // sad trombone
+  "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview221/v4/46/a7/b9/46a7b96d-8a78-3828-5d85-b8c934dfad8f/mzaf_16641866926981930519.plus.aac.p.m4a", // oh-no sad trombone
+  "https://audio-ssl.itunes.apple.com/itunes-assets/Music/v4/f7/55/3a/f7553aea-f4b2-bee6-775a-c6ce13448e9a/mzaf_3620503634827422898.plus.aac.p.m4a", // wrong-answer trombone 1
+  "https://audio-ssl.itunes.apple.com/itunes-assets/Music/v4/43/3e/7d/433e7d65-b5ba-8d4d-c408-ce9ec3368a08/mzaf_3218948314881923432.plus.aac.p.m4a", // wrong-answer trombone 2
+  "https://audio-ssl.itunes.apple.com/itunes-assets/Music/v4/ee/e0/1a/eee01acb-b455-4436-270e-b9dd9cb455fd/mzaf_502464005326622632.plus.aac.p.m4a", // wrong-answer trombone 3
+  "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview211/v4/17/23/b9/1723b97f-be2e-ee68-a860-8f2f3068febe/mzaf_9243882732549107712.plus.aac.p.m4a", // "fail"
+  "https://audio-ssl.itunes.apple.com/itunes-assets/Music/v4/93/c5/03/93c503bd-9f08-1719-5477-0347e4643517/mzaf_2269327689972386505.plus.aac.p.m4a", // wrong-answer buzzer
+  "https://audio-ssl.itunes.apple.com/itunes-assets/Music/v4/af/5b/44/af5b446d-5431-1d8f-14bf-02711e863716/mzaf_1821494247077864678.plus.aac.p.m4a"  // wrong-answer notification
+];
 const CASH_SOUND = "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview128/v4/66/3f/9b/663f9b09-afe0-99f0-cd1f-cf025634103a/mzaf_6668028411307229377.plus.aac.p.m4a"; // cash register ~5s
 const CHEER_SOUND = "https://audio-ssl.itunes.apple.com/itunes-assets/Music4/v4/48/98/fd/4898fd56-a6ff-9ca3-d126-4ee36ba0be4d/mzaf_5624912195803611857.plus.aac.p.m4a"; // crowd cheer ~3s
 
@@ -465,10 +475,14 @@ let _siren=null, _womp=null, currentAudio=null;
 function playUri(uri){ try{ const a=new Audio(uri); a.volume=1; a.play().catch(()=>{}); return a; }catch(e){ return null; } }
 function playFallbackSiren(){ if(!_siren) _siren=makeWav(buildSiren()); currentAudio=playUri(_siren); }
 function synthWomp(){ if(!_womp) _womp=makeWav(buildWomp()); playUri(_womp); }
-// Real trombone if online; synth womp as the offline fallback.
+// A random fail sound each time (never the same twice in a row); synth womp offline.
+let _lastFail=-1;
 function playWompWomp(){
   try{
-    const a=new Audio(WOMP_SOUND); a.volume=1;
+    let i=Math.floor(Math.random()*FAIL_SOUNDS.length);
+    if(FAIL_SOUNDS.length>1 && i===_lastFail) i=(i+1)%FAIL_SOUNDS.length;
+    _lastFail=i;
+    const a=new Audio(FAIL_SOUNDS[i]); a.volume=1;
     a.addEventListener("error",synthWomp);
     a.play().catch(synthWomp);
   }catch(e){ synthWomp(); }
@@ -706,7 +720,7 @@ const RULE_FIELDS=[
   ["songNumber","...when a total hits exactly","num"],
   ["songDuration","Song length before auto-return (sec)","num"],
   ["autoReturn","Auto return to game after","bool"],
-  ["wompOn","Sad trombone on Farkle","bool"],
+  ["wompOn","Random fail sound on Farkle","bool"],
   ["bankSoundOn","Cha-ching when banking","bool"],
   ["winSoundOn","Cheers when someone wins","bool"],
   ["note","The 5150 song streams Apple's official 30-sec preview of Dierks Bentley's track (needs internet). No internet? It plays a police siren instead."],
