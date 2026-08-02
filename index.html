@@ -397,67 +397,76 @@ function undo(){
 
 function flash(m){ game.msg=m; render(); }
 
-/* ---------------- SOUND (all synthesized — no files, no ads, works offline) ---------------- */
-let songTimer=null, audioCtx=null;
-function AC(){
-  const A=window.AudioContext||window.webkitAudioContext; if(!A) return null;
-  if(!audioCtx) audioCtx=new A();
-  if(audioCtx.state==="suspended") audioCtx.resume();
-  return audioCtx;
+/* ---------------- SOUND ----------------
+   Synthesized to an in-memory WAV and played through a normal <audio> element.
+   This plays much more reliably on phones than the Web Audio API (which the
+   iPhone ring/silent switch mutes). No files, no ads, works offline. */
+let songTimer=null;
+const SR=16000; // sample rate
+// Render a list of notes {freq,start,dur,type,vol,glideTo} to a WAV data URI.
+function makeWav(notes){
+  let total=0;
+  notes.forEach(n=>{ total=Math.max(total, n.start+n.dur); });
+  const len=Math.ceil((total+0.05)*SR);
+  const buf=new Float32Array(len);
+  notes.forEach(n=>{
+    const s0=Math.floor(n.start*SR), s1=Math.floor((n.start+n.dur)*SR);
+    for(let i=s0;i<s1 && i<len;i++){
+      const t=(i-s0)/SR, prog=t/n.dur;
+      const freq = n.glideTo ? n.freq+(n.glideTo-n.freq)*prog : n.freq;
+      const frac = ((i/SR)*freq) % 1;
+      let w;
+      if(n.type==="square") w = frac<0.5?1:-1;
+      else if(n.type==="sawtooth") w = 2*frac-1;
+      else if(n.type==="triangle") w = 4*Math.abs(frac-0.5)-1;
+      else w = Math.sin(2*Math.PI*frac);
+      const atk=0.008;
+      const env = t<atk ? t/atk : Math.pow(1-prog, 1.2);
+      buf[i] += w*(n.vol||0.2)*env;
+    }
+  });
+  const ab=new ArrayBuffer(44+len*2), dv=new DataView(ab);
+  const wr=(o,s)=>{ for(let i=0;i<s.length;i++) dv.setUint8(o+i,s.charCodeAt(i)); };
+  wr(0,"RIFF"); dv.setUint32(4,36+len*2,true); wr(8,"WAVE"); wr(12,"fmt ");
+  dv.setUint32(16,16,true); dv.setUint16(20,1,true); dv.setUint16(22,1,true);
+  dv.setUint32(24,SR,true); dv.setUint32(28,SR*2,true); dv.setUint16(32,2,true); dv.setUint16(34,16,true);
+  wr(36,"data"); dv.setUint32(40,len*2,true);
+  let o=44;
+  for(let i=0;i<len;i++){ const v=Math.max(-1,Math.min(1,buf[i])); dv.setInt16(o,v*32767,true); o+=2; }
+  const u8=new Uint8Array(ab); let bin="";
+  for(let i=0;i<u8.length;i++) bin+=String.fromCharCode(u8[i]);
+  return "data:audio/wav;base64,"+btoa(bin);
 }
-// one note; glideTo bends the pitch over the note (for sirens / trombone slides)
-function tone(ctx,freq,start,dur,type,vol,glideTo){
-  const o=ctx.createOscillator(), g=ctx.createGain();
-  o.type=type||"square"; o.connect(g); g.connect(ctx.destination);
-  o.frequency.setValueAtTime(freq,start);
-  if(glideTo) o.frequency.linearRampToValueAtTime(glideTo,start+dur);
-  g.gain.setValueAtTime(0.0001,start);
-  g.gain.linearRampToValueAtTime(vol||0.2,start+0.02);
-  g.gain.exponentialRampToValueAtTime(0.0001,start+dur);
-  o.start(start); o.stop(start+dur+0.03);
-}
-function siren(ctx,start,reps){
-  for(let i=0;i<(reps||3);i++){
+function sirenNotes(start,reps,out){
+  for(let i=0;i<reps;i++){
     const t=start+i*0.5;
-    tone(ctx,660,t,0.25,"sawtooth",0.16,880);
-    tone(ctx,880,t+0.25,0.25,"sawtooth",0.16,660);
+    out.push({freq:660,glideTo:880,start:t,dur:0.25,type:"sawtooth",vol:0.28});
+    out.push({freq:880,glideTo:660,start:t+0.25,dur:0.25,type:"sawtooth",vol:0.28});
   }
-  return start+(reps||3)*0.5;
 }
-// Upbeat "jackpot" riff, then the po-po siren; loops to fill `dur` seconds.
-function play5150Tune(dur){
-  const ctx=AC(); if(!ctx) return;
-  const t0=ctx.currentTime;
-  const riff=[ // note, length (beats)
-    [784,.5],[784,.25],[880,.25],[988,.5],[784,.5],
-    [659,.5],[784,.75],[988,.5],[880,.75]
-  ];
-  const beat=0.16;
-  let t=t0, guard=0;
-  while(t - t0 < (dur||7) - 1.2 && guard<200){
-    guard++;
+function buildJingle(dur){
+  const riff=[[784,.5],[784,.25],[880,.25],[988,.5],[784,.5],[659,.5],[784,.75],[988,.5],[880,.75]];
+  const beat=0.16, notes=[]; let t=0;
+  while(t < dur-1.2){
     for(const [f,b] of riff){
       const d=b*beat;
-      tone(ctx,f,t,d*0.95,"square",0.16);
-      tone(ctx,f/2,t,d*0.95,"triangle",0.10); // bass octave
+      notes.push({freq:f,start:t,dur:d*0.95,type:"square",vol:0.30});
+      notes.push({freq:f/2,start:t,dur:d*0.95,type:"triangle",vol:0.16});
       t+=d;
-      if(t - t0 >= (dur||7) - 1.2) break;
+      if(t>=dur-1.2) break;
     }
   }
-  siren(ctx,t,2); // "somebody call the po-po"
+  sirenNotes(t,2,notes); // "somebody call the po-po"
+  return notes;
 }
-// Classic sad-trombone womp-womp for a Farkle.
-function playWompWomp(){
-  const ctx=AC(); if(!ctx) return;
-  const t0=ctx.currentTime;
-  const notes=[233.08,220.00,207.65,196.00]; // Bb3 A3 G#3 G3, each sliding down
-  let t=t0;
-  notes.forEach((f,i)=>{
-    const dur = i===notes.length-1 ? 0.6 : 0.28;
-    tone(ctx,f,t,dur,"sawtooth",0.22,f*0.93);
-    t += (i===notes.length-1?0.6:0.24);
-  });
+function buildWomp(){
+  const seq=[[233.08,0,0.30],[220.00,0.28,0.30],[207.65,0.56,0.30],[196.00,0.84,0.75]];
+  return seq.map(([f,s,d])=>({freq:f,glideTo:f*0.93,start:s,dur:d,type:"sawtooth",vol:0.32}));
 }
+let _jingle={}, _womp=null;
+function playUri(uri){ try{ const a=new Audio(uri); a.volume=1; a.play().catch(()=>{}); return a; }catch(e){ return null; } }
+function play5150Tune(dur){ dur=Math.max(4,dur||5); if(!_jingle[dur]) _jingle[dur]=makeWav(buildJingle(dur)); return playUri(_jingle[dur]); }
+function playWompWomp(){ if(!_womp) _womp=makeWav(buildWomp()); playUri(_womp); }
 
 /* ---------------- 5150 CELEBRATION ---------------- */
 function songVisual(){
