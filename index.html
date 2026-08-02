@@ -205,17 +205,21 @@ const LS_GAME  = "farkle_game_v1";
 
 // Two ready-made scoring sets. "House" = how Tom grew up playing.
 // "Store" = the boxed commercial game rules.
+// nokFlat=false : 4/5/6 of a kind = the 3-of-a-kind score × mult4/5/6
+// nokFlat=true  : 4/5/6 of a kind = flat4/flat5/flat6, no matter the number
 const HOUSE_RULES = {
   single1:100, single5:50,
   t1:1000, t2:200, t3:300, t4:400, t5:500, t6:600,
-  mult4:2, mult5:3, mult6:4,        // multiplier of the 3-of-a-kind score
+  nokFlat:false, mult4:2, mult5:3, mult6:4,
+  flat4:1000, flat5:2000, flat6:3000,
   straight:1500, threePairs:750, twoTriplets:2500, fourPlusPair:0,
   winScore:10000, onBoardMin:500, hotDice:true
 };
 const STORE_RULES = {
   single1:100, single5:50,
   t1:300, t2:200, t3:300, t4:400, t5:500, t6:600,
-  mult4:2, mult5:3, mult6:4,
+  nokFlat:true, mult4:2, mult5:3, mult6:4,
+  flat4:1000, flat5:2000, flat6:3000,
   straight:2500, threePairs:1500, twoTriplets:1500, fourPlusPair:1500,
   winScore:10000, onBoardMin:500, hotDice:true
 };
@@ -271,8 +275,10 @@ function greedy(counts){
   for(let v=1; v<=6; v++){
     const c=counts[v];
     if(c>=3){
-      const mult = c===3?1 : c===4?rules.mult4 : c===5?rules.mult5 : rules.mult6;
-      const s = tripBase[v]*mult;
+      let s;
+      if(c===3){ s=tripBase[v]; }
+      else if(rules.nokFlat){ s = c===4?rules.flat4 : c===5?rules.flat5 : rules.flat6; }
+      else { const mult = c===4?rules.mult4 : c===5?rules.mult5 : rules.mult6; s = tripBase[v]*mult; }
       total+=s; used+=c;
       bd.push((c)+"×"+v+"'s = "+s);
     } else if(c>0){
@@ -581,7 +587,11 @@ const RULE_FIELDS=[
   ["grp","Three of a kind"],
   ["t1","Three 1's","num"],["t2","Three 2's","num"],["t3","Three 3's","num"],
   ["t4","Three 4's","num"],["t5","Three 5's","num"],["t6","Three 6's","num"],
-  ["grp","More of a kind (× the three-of-a-kind score)"],
+  ["grp","Four / five / six of a kind"],
+  ["nokFlat","Flat points, no matter the number","bool"],
+  ["note","If ON, use these flat values:"],
+  ["flat4","Four of a kind","num"],["flat5","Five of a kind","num"],["flat6","Six of a kind","num"],
+  ["note","If OFF, multiply the three-of-a-kind score by:"],
   ["mult4","Four of a kind ×","num"],["mult5","Five of a kind ×","num"],["mult6","Six of a kind ×","num"],
   ["grp","Special combos (all six dice)"],
   ["straight","Straight 1-6","num"],["threePairs","Three pairs","num"],
@@ -620,6 +630,7 @@ function openSettings(){
   const f=document.getElementById("rulesForm");
   f.innerHTML=RULE_FIELDS.map(row=>{
     if(row[0]==="grp") return '<div class="grp">'+row[1]+'</div>';
+    if(row[0]==="note") return '<div class="sub" style="margin:8px 0 0">'+row[1]+'</div>';
     const [key,label,type]=row;
     if(type==="bool"){
       return '<label class="f toggle"><span>'+label+'</span><input type="checkbox" data-k="'+key+'" '+(rules[key]?"checked":"")+'></label>';
