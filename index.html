@@ -205,8 +205,10 @@ const LS_GAME  = "farkle_game_v1";
 // Apple's official 30-second preview of Dierks Bentley "5-1-5-0" (album: Home).
 // Audio-only, no ads, CORS-open. Streams from Apple, so it needs internet.
 const SONG_PREVIEW = "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview211/v4/b2/2a/26/b22a2626-55bd-e064-9c59-fcd7960c6d0f/mzaf_8830689377643567910.plus.aac.p.m4a";
-// Real sad-trombone sound effect (~4s, CORS-open Apple preview) for a Farkle.
-const WOMP_SOUND = "https://audio-ssl.itunes.apple.com/itunes-assets/Music3/v4/14/5d/60/145d6075-fbd5-e88b-030f-95fea248a4ee/mzaf_7558783773857321600.plus.aac.p.m4a";
+// Real sound effects (CORS-open Apple previews).
+const WOMP_SOUND = "https://audio-ssl.itunes.apple.com/itunes-assets/Music3/v4/14/5d/60/145d6075-fbd5-e88b-030f-95fea248a4ee/mzaf_7558783773857321600.plus.aac.p.m4a"; // sad trombone ~4s
+const CASH_SOUND = "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview128/v4/66/3f/9b/663f9b09-afe0-99f0-cd1f-cf025634103a/mzaf_6668028411307229377.plus.aac.p.m4a"; // cash register ~5s
+const CHEER_SOUND = "https://audio-ssl.itunes.apple.com/itunes-assets/Music4/v4/48/98/fd/4898fd56-a6ff-9ca3-d126-4ee36ba0be4d/mzaf_5624912195803611857.plus.aac.p.m4a"; // crowd cheer ~3s
 
 // Two ready-made scoring sets. "House" = how Tom grew up playing.
 // "Store" = the boxed commercial game rules.
@@ -233,7 +235,7 @@ const PRESETS = {house:HOUSE_RULES, store:STORE_RULES};
 const SONG_DEFAULTS = {
   songOn:true, songNumber:5150,
   songDuration:22, autoReturn:true, useLocalClip:false,
-  wompOn:true
+  wompOn:true, bankSoundOn:true, winSoundOn:true
 };
 const DEFAULT_RULES = {...HOUSE_RULES, ...SONG_DEFAULTS, preset:'house'};
 
@@ -342,9 +344,10 @@ function bank(){
   p.total += game.turnScore;
   p.onBoard = true;
   const banked=game.turnScore;
-  // song easter egg
+  // song easter egg (skips the cha-ching so they don't clash)
   if(rules.songOn && p.total === rules.songNumber){ triggerSong(p.name); }
-  // win / final round
+  else if(rules.bankSoundOn){ playSfx(CASH_SOUND); }
+  // win / final round (plays the cheer on crossing the win score)
   checkWin(p);
   advance("+"+banked+" banked for "+p.name+".");
 }
@@ -375,6 +378,7 @@ function advance(msg){
 function checkWin(p){
   if(!game.finalRound && p.total>=rules.winScore){
     game.finalRound=true; game.finalTrigger=game.current;
+    playWinCheer(); // someone just went over the win score
   }
 }
 function endGame(){
@@ -382,6 +386,7 @@ function endGame(){
   let w=game.players[0];
   game.players.forEach(pl=>{ if(pl.total>w.total) w=pl; });
   game.winner=w.name;
+  playWinCheer(); // in case the game was ended manually with nobody over the top
 }
 
 function snapshot(){
@@ -468,6 +473,9 @@ function playWompWomp(){
     a.play().catch(synthWomp);
   }catch(e){ synthWomp(); }
 }
+// Simple one-shot effect (cha-ching, cheers). Silent if offline — no fallback needed.
+function playSfx(url){ try{ const a=new Audio(url); a.volume=1; a.play().catch(()=>{}); }catch(e){} }
+function playWinCheer(){ if(game.cheered) return; game.cheered=true; if(rules.winSoundOn) playSfx(CHEER_SOUND); }
 
 /* ---------------- 5150 CELEBRATION ---------------- */
 function songVisual(){
@@ -643,7 +651,7 @@ function startGame(){
   game={
     players:players.map(p=>({name:p.name, total:p.start, start:p.start, onBoard:p.start>0})),
     current:0, turnScore:0, diceLeft:6, tray:[], msg:"",
-    finalRound:false, finalTrigger:0, finished:false, winner:null, history:[]
+    finalRound:false, finalTrigger:0, finished:false, winner:null, cheered:false, history:[]
   };
   closeSetup(); render(); saveGame();
 }
@@ -663,7 +671,7 @@ function restartGame(fromWinner){
   if(!fromWinner && !confirm("Restart with the same players? Scores go back to their starting points.")) return;
   game.players.forEach(p=>{ p.total=p.start||0; p.onBoard=(p.start||0)>0; });
   game.current=0; game.finalRound=false; game.finalTrigger=0;
-  game.finished=false; game.winner=null; game.history=[];
+  game.finished=false; game.winner=null; game.cheered=false; game.history=[];
   newTurnState();
   game.msg="New game — same players.";
   render(); saveGame();
@@ -698,7 +706,9 @@ const RULE_FIELDS=[
   ["songNumber","...when a total hits exactly","num"],
   ["songDuration","Song length before auto-return (sec)","num"],
   ["autoReturn","Auto return to game after","bool"],
-  ["wompOn","Womp-womp sound on Farkle","bool"],
+  ["wompOn","Sad trombone on Farkle","bool"],
+  ["bankSoundOn","Cha-ching when banking","bool"],
+  ["winSoundOn","Cheers when someone wins","bool"],
   ["note","The 5150 song streams Apple's official 30-sec preview of Dierks Bentley's track (needs internet). No internet? It plays a police siren instead."],
   ["note","Optional: drop your own farkle-clip.mp3 in the app folder and turn this on to use that instead."],
   ["useLocalClip","Use my own file (farkle-clip.mp3)","bool"]
