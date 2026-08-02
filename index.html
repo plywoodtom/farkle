@@ -154,6 +154,12 @@
   <div class="sheet">
     <h3>Custom Rules</h3>
     <div class="sub">Tweak scoring to match how your family plays. Saved on this device.</div>
+    <div class="grp" style="margin-top:0">Quick-fill a preset</div>
+    <div class="subrow" style="margin-bottom:6px">
+      <button class="btn reset" id="presetHouse" onclick="pickPreset('house')">House Rules</button>
+      <button class="btn reset" id="presetStore" onclick="pickPreset('store')">Store-Bought (boxed)</button>
+    </div>
+    <div class="sub" id="presetDesc" style="margin-bottom:14px"></div>
     <div id="rulesForm"></div>
     <div class="subrow" style="margin-top:16px;">
       <button class="btn reset" onclick="resetRules()">Restore defaults</button>
@@ -197,14 +203,29 @@ const SONG_ID = "Aa9Y0Hlrlbs";
 const LS_RULES = "farkle_rules_v1";
 const LS_GAME  = "farkle_game_v1";
 
-const DEFAULT_RULES = {
+// Two ready-made scoring sets. "House" = how Tom grew up playing.
+// "Store" = the boxed commercial game rules.
+const HOUSE_RULES = {
   single1:100, single5:50,
   t1:1000, t2:200, t3:300, t4:400, t5:500, t6:600,
   mult4:2, mult5:3, mult6:4,        // multiplier of the 3-of-a-kind score
-  straight:1500, threePairs:750, twoTriplets:2500,
-  winScore:10000, onBoardMin:500, hotDice:true,
-  songOn:true, songNumber:5150
+  straight:1500, threePairs:750, twoTriplets:2500, fourPlusPair:0,
+  winScore:10000, onBoardMin:500, hotDice:true
 };
+const STORE_RULES = {
+  single1:100, single5:50,
+  t1:300, t2:200, t3:300, t4:400, t5:500, t6:600,
+  mult4:2, mult5:3, mult6:4,
+  straight:2500, threePairs:1500, twoTriplets:1500, fourPlusPair:1500,
+  winScore:10000, onBoardMin:500, hotDice:true
+};
+const PRESETS = {house:HOUSE_RULES, store:STORE_RULES};
+// Song settings are kept separate so switching a scoring preset never disturbs them.
+const SONG_DEFAULTS = {
+  songOn:true, songNumber:5150,
+  songStart:48, songDuration:16, autoReturn:true, useLocalClip:false
+};
+const DEFAULT_RULES = {...HOUSE_RULES, ...SONG_DEFAULTS, preset:'house'};
 
 let rules = load(LS_RULES) || {...DEFAULT_RULES};
 rules = {...DEFAULT_RULES, ...rules}; // fill any new keys
@@ -230,6 +251,11 @@ function scoreDice(dice){
     if(pairs===3) candidates.push({score:rules.threePairs, used:6, breakdown:["Three pairs = "+rules.threePairs]});
     const trips = counts.filter(c=>c===3).length;
     if(trips===2) candidates.push({score:rules.twoTriplets, used:6, breakdown:["Two triplets = "+rules.twoTriplets]});
+    if(rules.fourPlusPair>0){
+      const hasFour = counts.some(c=>c===4);
+      const hasPair = counts.some(c=>c===2);
+      if(hasFour && hasPair) candidates.push({score:rules.fourPlusPair, used:6, breakdown:["Four of a kind + a pair = "+rules.fourPlusPair]});
+    }
   }
   // Greedy per-face scoring
   candidates.push(greedy(counts));
@@ -365,16 +391,41 @@ function undo(){
 function flash(m){ game.msg=m; render(); }
 
 /* ---------------- SONG ---------------- */
+let songTimer=null;
+function ytEmbed(start,end){
+  return '<iframe src="https://www.youtube.com/embed/'+SONG_ID+
+    '?autoplay=1&rel=0&playsinline=1&start='+start+'&end='+end+
+    '" allow="autoplay; encrypted-media" allowfullscreen></iframe>';
+}
 function triggerSong(name){
   document.getElementById("cbig").innerHTML="5&#8209;1&#8209;5&#8209;0";
   document.getElementById("ctag").textContent = (name?name+" hit ":"")+"5-1-5-0 — somebody call the po-po!";
   playSiren();
   const holder=document.getElementById("ytHolder");
-  holder.innerHTML='<iframe src="https://www.youtube.com/embed/'+SONG_ID+'?autoplay=1&rel=0" allow="autoplay; encrypted-media" allowfullscreen></iframe>';
+  const start=Math.max(0, rules.songStart|0);
+  const dur=Math.max(3, rules.songDuration|0);
+  const end=start+dur;
+
+  if(rules.useLocalClip){
+    holder.innerHTML='<audio id="clipEl" autoplay src="farkle-clip.mp3"></audio>'+
+      '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px;">🎵 5-1-5-0 🎵</div>';
+    const a=document.getElementById("clipEl");
+    a.addEventListener("ended",()=>{ if(rules.autoReturn) closeCelebrate(); });
+    a.addEventListener("error",()=>{ holder.innerHTML=ytEmbed(start,end); armAutoReturn(dur); });
+    armAutoReturn(dur+40); // safety net if the clip is long / never fires 'ended'
+  } else {
+    holder.innerHTML=ytEmbed(start,end);
+    armAutoReturn(dur);
+  }
   document.getElementById("celebrate").classList.add("show");
+}
+function armAutoReturn(dur){
+  clearTimeout(songTimer);
+  if(rules.autoReturn) songTimer=setTimeout(closeCelebrate,(dur+2)*1000);
 }
 function testSong(){ triggerSong(""); }
 function closeCelebrate(){
+  clearTimeout(songTimer);
   document.getElementById("celebrate").classList.remove("show");
   document.getElementById("ytHolder").innerHTML=""; // stop playback
 }
@@ -533,13 +584,38 @@ const RULE_FIELDS=[
   ["grp","More of a kind (× the three-of-a-kind score)"],
   ["mult4","Four of a kind ×","num"],["mult5","Five of a kind ×","num"],["mult6","Six of a kind ×","num"],
   ["grp","Special combos (all six dice)"],
-  ["straight","Straight 1-6","num"],["threePairs","Three pairs","num"],["twoTriplets","Two triplets","num"],
+  ["straight","Straight 1-6","num"],["threePairs","Three pairs","num"],
+  ["twoTriplets","Two triplets","num"],["fourPlusPair","Four of a kind + a pair","num"],
   ["grp","Game"],
   ["winScore","Points to win","num"],["onBoardMin","Min. to get on board","num"],
   ["hotDice","Hot dice (re-roll all 6)","bool"],
   ["grp","🎵 5-1-5-0 song rule"],
-  ["songOn","Play the song","bool"],["songNumber","Trigger on total =","num"]
+  ["songOn","Play the song","bool"],["songNumber","Trigger on total =","num"],
+  ["songStart","Clip starts at (seconds into song)","num"],
+  ["songDuration","Clip length (seconds)","num"],
+  ["autoReturn","Auto return to game after clip","bool"],
+  ["useLocalClip","Use my own file (farkle-clip.mp3)","bool"]
 ];
+function presetDescText(){
+  return rules.preset==='store'
+    ? "Store-bought (boxed game): three 1's = 300, three pairs = 1500, four-of-a-kind + a pair = 1500, two triplets = 1500, straight 1-6 = 2500."
+    : rules.preset==='house'
+    ? "House rules: three 1's = 1000, three-of-a-kind = face × 100, three pairs = 750, two triplets = 2500, straight 1-6 = 1500."
+    : "Custom set — tweaked from a preset.";
+}
+function refreshPresetUI(){
+  const h=document.getElementById("presetHouse"), s=document.getElementById("presetStore"), d=document.getElementById("presetDesc");
+  if(!h) return;
+  h.className="btn "+(rules.preset==='house'?'bank':'reset');
+  s.className="btn "+(rules.preset==='store'?'bank':'reset');
+  if(d) d.innerHTML=presetDescText();
+}
+function pickPreset(name){
+  rules={...rules, ...PRESETS[name], preset:name};   // keeps song settings intact
+  save(LS_RULES, rules);
+  openSettings();   // re-render form with the new values
+  render();
+}
 function openSettings(){
   const f=document.getElementById("rulesForm");
   f.innerHTML=RULE_FIELDS.map(row=>{
@@ -550,7 +626,11 @@ function openSettings(){
     }
     return '<label class="f"><span>'+label+'</span><input type="number" data-k="'+key+'" value="'+rules[key]+'"></label>';
   }).join("");
+  refreshPresetUI();
   document.getElementById("settingsModal").classList.add("show");
+}
+function matchesPreset(name){
+  return Object.keys(PRESETS[name]).every(k=>rules[k]===PRESETS[name][k]);
 }
 function saveSettings(){
   document.querySelectorAll('#rulesForm input').forEach(inp=>{
@@ -558,6 +638,7 @@ function saveSettings(){
     if(inp.type==="checkbox") rules[k]=inp.checked;
     else { const v=parseInt(inp.value,10); if(!isNaN(v)) rules[k]=v; }
   });
+  rules.preset = matchesPreset('house') ? 'house' : matchesPreset('store') ? 'store' : 'custom';
   save(LS_RULES, rules);
   document.getElementById("settingsModal").classList.remove("show");
   render();
