@@ -193,13 +193,12 @@
     <div class="tag" id="ctag">Somebody call the po-po!</div>
     <div class="yt" id="ytHolder"></div>
     <button class="close" onclick="closeCelebrate()">Turn it off &amp; keep playing</button>
-    <div class="foot">Song: <a id="ytlink" href="https://www.youtube.com/watch?v=Aa9Y0Hlrlbs" target="_blank" rel="noopener">Dierks Bentley &ndash; "5-1-5-0"</a>. Needs internet to stream.</div>
+    <div class="foot">Inspired by Dierks Bentley &ndash; "5-1-5-0". Sound is generated on your device (no ads, works offline).</div>
   </div>
 </div>
 
 <script>
 "use strict";
-const SONG_ID = "Aa9Y0Hlrlbs";
 const LS_RULES = "farkle_rules_v1";
 const LS_GAME  = "farkle_game_v1";
 
@@ -224,10 +223,11 @@ const STORE_RULES = {
   winScore:10000, onBoardMin:500, hotDice:true
 };
 const PRESETS = {house:HOUSE_RULES, store:STORE_RULES};
-// Song settings are kept separate so switching a scoring preset never disturbs them.
+// Sound settings are kept separate so switching a scoring preset never disturbs them.
 const SONG_DEFAULTS = {
   songOn:true, songNumber:5150,
-  songStart:48, songDuration:16, autoReturn:true, useLocalClip:false
+  songDuration:7, autoReturn:true, useLocalClip:false,
+  wompOn:true
 };
 const DEFAULT_RULES = {...HOUSE_RULES, ...SONG_DEFAULTS, preset:'house'};
 
@@ -344,6 +344,7 @@ function bank(){
 }
 
 function farkle(){
+  if(rules.wompOn) playWompWomp();
   snapshot();
   const p=game.players[game.current];
   const lost=game.turnScore;
@@ -396,60 +397,102 @@ function undo(){
 
 function flash(m){ game.msg=m; render(); }
 
-/* ---------------- SONG ---------------- */
-let songTimer=null;
-function ytEmbed(start,end){
-  return '<iframe src="https://www.youtube.com/embed/'+SONG_ID+
-    '?autoplay=1&rel=0&playsinline=1&start='+start+'&end='+end+
-    '" allow="autoplay; encrypted-media" allowfullscreen></iframe>';
+/* ---------------- SOUND (all synthesized — no files, no ads, works offline) ---------------- */
+let songTimer=null, audioCtx=null;
+function AC(){
+  const A=window.AudioContext||window.webkitAudioContext; if(!A) return null;
+  if(!audioCtx) audioCtx=new A();
+  if(audioCtx.state==="suspended") audioCtx.resume();
+  return audioCtx;
+}
+// one note; glideTo bends the pitch over the note (for sirens / trombone slides)
+function tone(ctx,freq,start,dur,type,vol,glideTo){
+  const o=ctx.createOscillator(), g=ctx.createGain();
+  o.type=type||"square"; o.connect(g); g.connect(ctx.destination);
+  o.frequency.setValueAtTime(freq,start);
+  if(glideTo) o.frequency.linearRampToValueAtTime(glideTo,start+dur);
+  g.gain.setValueAtTime(0.0001,start);
+  g.gain.linearRampToValueAtTime(vol||0.2,start+0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001,start+dur);
+  o.start(start); o.stop(start+dur+0.03);
+}
+function siren(ctx,start,reps){
+  for(let i=0;i<(reps||3);i++){
+    const t=start+i*0.5;
+    tone(ctx,660,t,0.25,"sawtooth",0.16,880);
+    tone(ctx,880,t+0.25,0.25,"sawtooth",0.16,660);
+  }
+  return start+(reps||3)*0.5;
+}
+// Upbeat "jackpot" riff, then the po-po siren; loops to fill `dur` seconds.
+function play5150Tune(dur){
+  const ctx=AC(); if(!ctx) return;
+  const t0=ctx.currentTime;
+  const riff=[ // note, length (beats)
+    [784,.5],[784,.25],[880,.25],[988,.5],[784,.5],
+    [659,.5],[784,.75],[988,.5],[880,.75]
+  ];
+  const beat=0.16;
+  let t=t0, guard=0;
+  while(t - t0 < (dur||7) - 1.2 && guard<200){
+    guard++;
+    for(const [f,b] of riff){
+      const d=b*beat;
+      tone(ctx,f,t,d*0.95,"square",0.16);
+      tone(ctx,f/2,t,d*0.95,"triangle",0.10); // bass octave
+      t+=d;
+      if(t - t0 >= (dur||7) - 1.2) break;
+    }
+  }
+  siren(ctx,t,2); // "somebody call the po-po"
+}
+// Classic sad-trombone womp-womp for a Farkle.
+function playWompWomp(){
+  const ctx=AC(); if(!ctx) return;
+  const t0=ctx.currentTime;
+  const notes=[233.08,220.00,207.65,196.00]; // Bb3 A3 G#3 G3, each sliding down
+  let t=t0;
+  notes.forEach((f,i)=>{
+    const dur = i===notes.length-1 ? 0.6 : 0.28;
+    tone(ctx,f,t,dur,"sawtooth",0.22,f*0.93);
+    t += (i===notes.length-1?0.6:0.24);
+  });
+}
+
+/* ---------------- 5150 CELEBRATION ---------------- */
+function songVisual(){
+  return '<div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;">'+
+    '<div style="font-size:42px;letter-spacing:8px;animation:pulse .5s infinite alternate;">🎶 🚓 🎶</div>'+
+    '<div style="color:var(--gold);font-size:18px;font-weight:800;">JACKPOT — 5150!</div></div>';
 }
 function triggerSong(name){
   document.getElementById("cbig").innerHTML="5&#8209;1&#8209;5&#8209;0";
   document.getElementById("ctag").textContent = (name?name+" hit ":"")+"5-1-5-0 — somebody call the po-po!";
-  playSiren();
   const holder=document.getElementById("ytHolder");
-  const start=Math.max(0, rules.songStart|0);
-  const dur=Math.max(3, rules.songDuration|0);
-  const end=start+dur;
+  const dur=Math.max(4, rules.songDuration|0);
 
   if(rules.useLocalClip){
-    holder.innerHTML='<audio id="clipEl" autoplay src="farkle-clip.mp3"></audio>'+
-      '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px;">🎵 5-1-5-0 🎵</div>';
+    holder.innerHTML='<audio id="clipEl" autoplay src="farkle-clip.mp3"></audio>'+songVisual();
     const a=document.getElementById("clipEl");
     a.addEventListener("ended",()=>{ if(rules.autoReturn) closeCelebrate(); });
-    a.addEventListener("error",()=>{ holder.innerHTML=ytEmbed(start,end); armAutoReturn(dur); });
-    armAutoReturn(dur+40); // safety net if the clip is long / never fires 'ended'
+    a.addEventListener("error",()=>{ play5150Tune(dur); }); // no file? fall back to the synth jingle
+    armAutoReturn(dur+40);
   } else {
-    holder.innerHTML=ytEmbed(start,end);
+    holder.innerHTML=songVisual();
+    play5150Tune(dur);
     armAutoReturn(dur);
   }
   document.getElementById("celebrate").classList.add("show");
 }
 function armAutoReturn(dur){
   clearTimeout(songTimer);
-  if(rules.autoReturn) songTimer=setTimeout(closeCelebrate,(dur+2)*1000);
+  if(rules.autoReturn) songTimer=setTimeout(closeCelebrate,(dur+1)*1000);
 }
 function testSong(){ triggerSong(""); }
 function closeCelebrate(){
   clearTimeout(songTimer);
   document.getElementById("celebrate").classList.remove("show");
-  document.getElementById("ytHolder").innerHTML=""; // stop playback
-}
-function playSiren(){
-  try{
-    const AC=window.AudioContext||window.webkitAudioContext; if(!AC) return;
-    const ctx=new AC(); const now=ctx.currentTime;
-    for(let i=0;i<3;i++){
-      const o=ctx.createOscillator(), g=ctx.createGain();
-      o.type="sawtooth"; o.connect(g); g.connect(ctx.destination);
-      const t=now+i*0.5;
-      o.frequency.setValueAtTime(660,t); o.frequency.linearRampToValueAtTime(880,t+0.25);
-      o.frequency.linearRampToValueAtTime(660,t+0.5);
-      g.gain.setValueAtTime(0.0001,t); g.gain.linearRampToValueAtTime(0.18,t+0.05);
-      g.gain.linearRampToValueAtTime(0.0001,t+0.48);
-      o.start(t); o.stop(t+0.5);
-    }
-  }catch(e){}
+  document.getElementById("ytHolder").innerHTML=""; // stop any clip
 }
 
 /* ---------------- RENDER ---------------- */
@@ -599,11 +642,13 @@ const RULE_FIELDS=[
   ["grp","Game"],
   ["winScore","Points to win","num"],["onBoardMin","Min. to get on board","num"],
   ["hotDice","Hot dice (re-roll all 6)","bool"],
-  ["grp","🎵 5-1-5-0 song rule"],
-  ["songOn","Play the song","bool"],["songNumber","Trigger on total =","num"],
-  ["songStart","Clip starts at (seconds into song)","num"],
-  ["songDuration","Clip length (seconds)","num"],
-  ["autoReturn","Auto return to game after clip","bool"],
+  ["grp","🔊 Sounds"],
+  ["songOn","Play 5150 jackpot sound","bool"],
+  ["songNumber","...when a total hits exactly","num"],
+  ["songDuration","Celebration length (seconds)","num"],
+  ["autoReturn","Auto return to game after","bool"],
+  ["wompOn","Womp-womp sound on Farkle","bool"],
+  ["note","Optional: drop a farkle-clip.mp3 in the app folder and turn this on to play your own audio instead of the built-in jingle."],
   ["useLocalClip","Use my own file (farkle-clip.mp3)","bool"]
 ];
 function presetDescText(){
