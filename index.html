@@ -39,7 +39,8 @@
   .prow .badge{font-size:10px; background:var(--red); color:#fff; padding:2px 6px; border-radius:6px; letter-spacing:.5px;}
   .prow .board{font-size:10px; background:#333; color:var(--dim); padding:2px 6px; border-radius:6px;}
   .prow .board.on{background:var(--good); color:#fff;}
-  .prow .tot{font-variant-numeric:tabular-nums; font-size:22px; font-weight:700;}
+  .prow .tot{font-variant-numeric:tabular-nums; font-size:22px; font-weight:700; cursor:pointer; padding:2px 4px; border-radius:6px;}
+  .prow .tot:active{background:var(--panel);}
 
   /* Turn */
   .turnhead{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px;}
@@ -175,7 +176,7 @@
 <div class="modal" id="setupModal">
   <div class="sheet">
     <h3 id="setupTitle">New Game</h3>
-    <div class="sub">Add player names in turn order.</div>
+    <div class="sub">Add player names in turn order. The number box is their starting score — leave it 0 for a normal game, or set it if you're picking up a game already in progress.</div>
     <div class="plist" id="plist"></div>
     <button class="ghost" style="width:100%" onclick="addPlayerRow()">+ Add player</button>
     <div class="subrow" style="margin-top:16px;">
@@ -204,6 +205,8 @@ const LS_GAME  = "farkle_game_v1";
 // Apple's official 30-second preview of Dierks Bentley "5-1-5-0" (album: Home).
 // Audio-only, no ads, CORS-open. Streams from Apple, so it needs internet.
 const SONG_PREVIEW = "https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview211/v4/b2/2a/26/b22a2626-55bd-e064-9c59-fcd7960c6d0f/mzaf_8830689377643567910.plus.aac.p.m4a";
+// Real sad-trombone sound effect (~4s, CORS-open Apple preview) for a Farkle.
+const WOMP_SOUND = "https://audio-ssl.itunes.apple.com/itunes-assets/Music3/v4/14/5d/60/145d6075-fbd5-e88b-030f-95fea248a4ee/mzaf_7558783773857321600.plus.aac.p.m4a";
 
 // Two ready-made scoring sets. "House" = how Tom grew up playing.
 // "Store" = the boxed commercial game rules.
@@ -456,7 +459,15 @@ function buildWomp(){
 let _siren=null, _womp=null, currentAudio=null;
 function playUri(uri){ try{ const a=new Audio(uri); a.volume=1; a.play().catch(()=>{}); return a; }catch(e){ return null; } }
 function playFallbackSiren(){ if(!_siren) _siren=makeWav(buildSiren()); currentAudio=playUri(_siren); }
-function playWompWomp(){ if(!_womp) _womp=makeWav(buildWomp()); playUri(_womp); }
+function synthWomp(){ if(!_womp) _womp=makeWav(buildWomp()); playUri(_womp); }
+// Real trombone if online; synth womp as the offline fallback.
+function playWompWomp(){
+  try{
+    const a=new Audio(WOMP_SOUND); a.volume=1;
+    a.addEventListener("error",synthWomp);
+    a.play().catch(synthWomp);
+  }catch(e){ synthWomp(); }
+}
 
 /* ---------------- 5150 CELEBRATION ---------------- */
 function songVisual(){
@@ -511,10 +522,16 @@ function render(){
         '<div class="name">'+esc(p.name)+
         (i===game.current&&!game.finished?' <span class="badge">TURN</span>':'')+
         '<span class="board'+(p.onBoard?' on':'')+'">'+(p.onBoard?'ON BOARD':'need '+rules.onBoardMin)+'</span>'+
-        '</div><div class="tot">'+p.total+'</div></div>';
+        '</div><div class="tot" onclick="editScore('+i+')" title="Tap to edit this score">'+p.total+'</div></div>';
   });
-  sb+='</div><div class="subrow"><button class="btn reset" onclick="undo()">↶ Undo turn</button>'+
-      '<button class="btn reset" onclick="openSetup(false)">New game</button></div></div>';
+  sb+='</div>'+
+      '<div class="subrow">'+
+        '<button class="btn reset" onclick="undo()">↶ Undo</button>'+
+        '<button class="btn reset" onclick="restartGame()">🔄 Restart</button>'+
+        '<button class="btn reset" onclick="endGameNow()">🏁 End</button>'+
+      '</div>'+
+      '<div class="subrow"><button class="btn reset" style="flex:1" onclick="openSetup(false)">✎ New / edit players</button></div>'+
+      '</div>';
 
   let main;
   if(game.finished){
@@ -522,8 +539,9 @@ function render(){
       '<div class="lights">🏆</div>'+
       '<h2 style="color:var(--red)">Winner</h2>'+
       '<div style="font-size:30px; font-weight:800; margin-bottom:6px;">'+esc(game.winner)+'</div>'+
-      '<div style="color:var(--dim); margin-bottom:14px;">First past '+rules.winScore+' points.</div>'+
-      '<button class="btn bank wide" onclick="openSetup(false)">Play again</button></div>';
+      '<div style="color:var(--dim); margin-bottom:14px;">Top score wins.</div>'+
+      '<button class="btn bank wide" onclick="restartGame(true)">🔄 Rematch (same players)</button>'+
+      '<div class="subrow"><button class="btn reset wide" onclick="openSetup(false)">✎ New / edit players</button></div></div>';
   } else {
     const r=scoreDice(game.tray);
     const bad = r.used < game.tray.length;
@@ -597,31 +615,63 @@ function welcome(){
 function esc(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 /* ---------------- SETUP MODAL ---------------- */
-let setupNames=[];
+let setupPlayers=[]; // [{name, start}]
 function openSetup(first){
-  setupNames = (game&&game.players&&!first)? game.players.map(p=>p.name) : ["Player 1","Player 2"];
-  document.getElementById("setupTitle").textContent = first? "New Game":"New Game";
+  setupPlayers = (game&&game.players&&!first)
+    ? game.players.map(p=>({name:p.name, start:p.start||0}))
+    : [{name:"Player 1",start:0},{name:"Player 2",start:0}];
   renderPlist();
   document.getElementById("setupModal").classList.add("show");
 }
 function closeSetup(){ document.getElementById("setupModal").classList.remove("show"); }
 function renderPlist(){
   const el=document.getElementById("plist");
-  el.innerHTML = setupNames.map((n,i)=>
-    '<div class="prowedit"><input type="text" value="'+esc(n)+'" oninput="setupNames['+i+']=this.value" placeholder="Player '+(i+1)+'">'+
-    (setupNames.length>1?'<button onclick="delPlayerRow('+i+')">×</button>':'')+'</div>').join("");
+  el.innerHTML = setupPlayers.map((p,i)=>
+    '<div class="prowedit">'+
+      '<input type="text" value="'+esc(p.name)+'" oninput="setupPlayers['+i+'].name=this.value" placeholder="Player '+(i+1)+'">'+
+      '<input type="number" value="'+(p.start||0)+'" oninput="setupPlayers['+i+'].start=parseInt(this.value)||0" title="Starting points" style="width:92px;text-align:right">'+
+      (setupPlayers.length>1?'<button onclick="delPlayerRow('+i+')">×</button>':'')+
+    '</div>').join("");
 }
-function addPlayerRow(){ if(setupNames.length>=10) return; setupNames.push("Player "+(setupNames.length+1)); renderPlist(); }
-function delPlayerRow(i){ setupNames.splice(i,1); renderPlist(); }
+function addPlayerRow(){ if(setupPlayers.length>=12) return; setupPlayers.push({name:"Player "+(setupPlayers.length+1),start:0}); renderPlist(); }
+function delPlayerRow(i){ setupPlayers.splice(i,1); renderPlist(); }
 function startGame(){
-  const names=setupNames.map(s=>s.trim()).filter(Boolean);
-  if(names.length<1){ alert("Add at least one player."); return; }
+  const players=setupPlayers
+    .map(p=>({name:(p.name||"").trim(), start:p.start||0}))
+    .filter(p=>p.name);
+  if(players.length<1){ alert("Add at least one player."); return; }
   game={
-    players:names.map(n=>({name:n,total:0,onBoard:false})),
+    players:players.map(p=>({name:p.name, total:p.start, start:p.start, onBoard:p.start>0})),
     current:0, turnScore:0, diceLeft:6, tray:[], msg:"",
     finalRound:false, finalTrigger:0, finished:false, winner:null, history:[]
   };
   closeSetup(); render(); saveGame();
+}
+// Manually set a player's score (tap their total). Handles corrections + joining mid-game.
+function editScore(i){
+  const p=game.players[i];
+  const v=prompt("Set "+p.name+"'s score:", p.total);
+  if(v===null) return;
+  const n=parseInt(v,10); if(isNaN(n)) return;
+  snapshot();
+  p.total=n;
+  if(n>0) p.onBoard=true;
+  render(); saveGame();
+}
+// Same players, scores back to their starting points.
+function restartGame(fromWinner){
+  if(!fromWinner && !confirm("Restart with the same players? Scores go back to their starting points.")) return;
+  game.players.forEach(p=>{ p.total=p.start||0; p.onBoard=(p.start||0)>0; });
+  game.current=0; game.finalRound=false; game.finalTrigger=0;
+  game.finished=false; game.winner=null; game.history=[];
+  newTurnState();
+  game.msg="New game — same players.";
+  render(); saveGame();
+}
+// Stop now and crown the current leader.
+function endGameNow(){
+  if(!confirm("End the game now and show the winner?")) return;
+  endGame(); render(); saveGame();
 }
 
 /* ---------------- SETTINGS MODAL ---------------- */
